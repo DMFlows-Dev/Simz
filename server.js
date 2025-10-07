@@ -6,6 +6,7 @@ const callRoutes = require('./routes/callRoutes');
 const app = express();
 app.use(express.json());
 app.use('/api', callRoutes);
+
 app.get('/', (req, res) => {
   res.send('Welcome to the Call Analytics API');
 });
