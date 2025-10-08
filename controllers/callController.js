@@ -488,7 +488,8 @@ exports.getTotalCallTime = async (req, res) => {
 
 
 // GET /api/billing-rows?company_id=comp_0001&from=2025-08-01&to=2025-08-31
-exports.getBillingTable = async (req, res) => {
+// GET /api/billing-totals?company_id=comp_0001&from=2025-08-01&to=2025-08-31
+exports.getBillingTable= async (req, res) => {
   try {
     const { company_id, from, to } = req.query;
 
@@ -514,20 +515,17 @@ exports.getBillingTable = async (req, res) => {
       SELECT
         Company_ID AS company_id,
         ROUND(
-          COALESCE(
-            Call_Duration,
-            TIMESTAMPDIFF(SECOND, Call_DateTime, End_Time),
-            0
-          ) / 60, 2
-        ) AS duration_minutes
+          SUM(COALESCE(Call_Duration, TIMESTAMPDIFF(SECOND, Call_DateTime, End_Time), 0)) / 60, 2
+        ) AS minutes
       FROM calls
       ${where}
-      ORDER BY Call_DateTime ASC
+      GROUP BY Company_ID
+      ORDER BY minutes DESC
     `;
 
     const [rows] = await db.query(sql, params);
     res.json({
-      message: 'Billing rows (minutes) fetched',
+      message: 'Total minutes by company',
       filters: { company_id: company_id || 'ALL', from: from || null, to: to || null },
       data: rows
     });
