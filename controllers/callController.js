@@ -40,26 +40,30 @@ exports.getCallLengths = async (req, res) => {
     if (from && to) {
       sql += ` AND cl.start_time >= ? AND cl.start_time < DATE_ADD(?, INTERVAL 1 DAY)`;
       params.push(from, to);
+    } else if (from) {
+      sql += ` AND cl.start_time >= ?`;
+      params.push(from);
+    } else if (to) {
+      sql += ` AND cl.start_time < DATE_ADD(?, INTERVAL 1 DAY)`;
+      params.push(to);
     }
 
-    sql += ` ORDER BY cl.start_time DESC`;  //latest most recent calls
-
-    // Debug: verify which SQL is actually running
-    console.log('[getCallLengths] SQL:', sql, 'PARAMS:', params);
+    sql += ` ORDER BY cl.start_time DESC`;
 
     const [rows] = await db.query(sql, params);
+
     return res.json({
+      message: rows.length ? 'Call lengths fetched successfully' : 'No calls found for the given filters',
       company_id: company_id || 'ALL',
       from: from || null,
       to: to || null,
-      count: rows.length,
-      calls: rows
+      data: rows
     });
   } catch (error) {
-    console.error('[getCallLengths] ERROR:', error);
     res.status(500).json({ error: 'Database error', details: error.message });
   }
 };
+
 
 //call rates 
 exports.getCallRates = async (req, res) => {
@@ -97,20 +101,15 @@ exports.getCallRates = async (req, res) => {
     return res.json({
       company_id: company_id || 'ALL',
       success_calls: Number(r.success_calls || 0),
-      failed_calls:  Number(r.failed_calls || 0),
-      total_calls:   Number(r.total_calls  || 0),
-      success_pct:   Number(r.success_pct  || 0),
-      failed_pct:    Number(r.failed_pct   || 0),
+      failed_calls: Number(r.failed_calls || 0),
+      total_calls: Number(r.total_calls || 0),
+      success_pct: Number(r.success_pct || 0),
+      failed_pct: Number(r.failed_pct || 0),
     });
   } catch (error) {
     res.status(500).json({ error: 'Database error', details: error.message });
   }
 };
-
-
-
-
-
 
 // GET /api/avg-call-time?from=YYYY-MM-DD&to=YYYY-MM-DD&company_id=comp_0001
 exports.getAvgCallTime = async (req, res) => {
@@ -149,8 +148,6 @@ exports.getAvgCallTime = async (req, res) => {
   }
 };
 
-
-// GET /api/answer-machine-detection?from=YYYY-MM-DD&to=YYYY-MM-DD&company_id=comp_0001
 // GET /api/answer-machine-detection?from=YYYY-MM-DD&to=YYYY-MM-DD&company_id=comp_0001
 exports.getAnswerMachineDetection = async (req, res) => {
   try {
@@ -194,7 +191,6 @@ exports.getAnswerMachineDetection = async (req, res) => {
   }
 };
 
-
 // GET /api/concurrent-calls?from=YYYY-MM-DD&to=YYYY-MM-DD&company_id=comp_0001
 exports.getConcurrentCalls = async (req, res) => {
   try {
@@ -222,7 +218,7 @@ exports.getConcurrentCalls = async (req, res) => {
     // If NO filters -> return ALL grouped rows (no LIMIT)
     // If any filter is present -> default LIMIT 1 (peak only), unless ?limit=N is provided
     const noFilters = !company_id && !from && !to;
-    const useLimit = noFilters ? '' : `LIMIT ${Number(limit) > 0 ? Number(limit) : 1}`;
+    // const useLimit = noFilters ? '' : `LIMIT ${Number(limit) > 0 ? Number(limit) : 1}`;
 
     const sql = `
       SELECT
@@ -231,10 +227,10 @@ exports.getConcurrentCalls = async (req, res) => {
       FROM calls
       ${where}
       GROUP BY call_time
-      ORDER BY concurrent_calls DESC, call_time DESC
-      ${useLimit};
+      HAVING concurrent_calls > 1
+      ORDER BY concurrent_calls DESC, call_time DESC;
     `;
-
+    console.log(sql)
     const [rows] = await db.query(sql, params);
 
     res.json({
@@ -257,7 +253,13 @@ exports.getPeakCallTimes = async (req, res) => {
   try {
     const { from, to, company_id } = req.query;
 
-    // Base SQL
+    // metadata to echo back in response (nulls if missing)
+    const meta = {
+      company_id: company_id ?? null,
+      from: from ?? null,
+      to: to ?? null
+    };
+
     let sql = `
       SELECT 
         DATE_FORMAT(Call_DateTime, '%Y-%m-%d %H:00:00') AS hour_slot,
@@ -265,18 +267,14 @@ exports.getPeakCallTimes = async (req, res) => {
       FROM calls
       WHERE 1=1
     `;
-
     const params = [];
 
-    // Optional company filter
     if (company_id) {
       sql += ' AND Company_ID = ?';
       params.push(company_id);
     }
-
-    // Optional date range filter
     if (from && to) {
-      sql += ' AND Call_DateTime BETWEEN ? AND DATE_ADD(?, INTERVAL 1 DAY)';
+      sql += ' AND Call_DateTime >= ? AND Call_DateTime < DATE_ADD(?, INTERVAL 1 DAY)';
       params.push(from, to);
     } else if (from) {
       sql += ' AND Call_DateTime >= ?';
@@ -286,40 +284,31 @@ exports.getPeakCallTimes = async (req, res) => {
       params.push(to);
     }
 
-    // Grouping and sorting
     sql += `
       GROUP BY hour_slot
       ORDER BY total_calls DESC
-      LIMIT 10;
+      LIMIT 10
     `;
 
-    // Execute query
     const [rows] = await db.query(sql, params);
 
     if (rows.length > 0) {
-      res.json({
+      return res.json({
         message: 'Top 10 peak call times fetched successfully',
-        ...(company_id && { company_id }),
-        ...(from && { from }),
-        ...(to && { to }),
+        ...meta,
         data: rows
       });
-    } else {
-      res.json({
-        message: 'No calls found for the given filters',
-        ...(company_id && { company_id }),
-        ...(from && { from }),
-        ...(to && { to })
-      });
     }
+    return res.json({
+      message: 'No calls found for the given filters',
+      ...meta
+    });
 
   } catch (error) {
-    res.status(500).json({
-      error: 'Database error',
-      details: error.message
-    });
+    res.status(500).json({ error: 'Database error', details: error.message });
   }
 };
+
 
 
 
@@ -333,9 +322,23 @@ exports.getPeakCallTimes = async (req, res) => {
 // ?month=2025-09
 // ?year=2025
 // (optional) &company_id=comp_0001
+// helper to YYYY-MM-DD
+
+
+// helper to output "ALL" when a value is missing
+const asALL = v => (v === undefined || v === null || v === '' ? 'ALL' : v);
+
+// helper to format Date -> YYYY-MM-DD
+const fmtDate = d => {
+  const x = new Date(d);
+  const m = String(x.getMonth() + 1).padStart(2, '0');
+  const day = String(x.getDate()).padStart(2, '0');
+  return `${x.getFullYear()}-${m}-${day}`;
+};
+
 exports.getTotalCallTime = async (req, res) => {
   try {
-    const { company_id, date, month, year } = req.query;
+    const { company_id, date, month, year, from, to } = req.query;
 
     // Base WHERE
     let where = 'WHERE 1=1';
@@ -346,7 +349,7 @@ exports.getTotalCallTime = async (req, res) => {
       params.push(company_id);
     }
 
-    // prefer stored duration (seconds), else compute from start/end
+    // Prefer stored duration; otherwise compute from Call_DateTime -> End_Time
     const sumExpr = `
       SUM(
         COALESCE(
@@ -357,88 +360,128 @@ exports.getTotalCallTime = async (req, res) => {
       )
     `;
 
-    // --- DAY MODE ---
+    /* ============ RANGE MODE (from / to) ============ */
+    if (from || to) {
+      let w = where;
+      const p = [...params];
+
+      if (from && to) {
+        // inclusive end-day
+        w += ' AND Call_DateTime >= ? AND Call_DateTime < DATE_ADD(?, INTERVAL 1 DAY)';
+        p.push(from, to);
+      } else if (from) {
+        w += ' AND Call_DateTime >= ?';
+        p.push(from);
+      } else if (to) {
+        w += ' AND Call_DateTime < DATE_ADD(?, INTERVAL 1 DAY)';
+        p.push(to);
+      }
+
+      const sql = `
+        SELECT
+          ${sumExpr} AS total_seconds,
+          SEC_TO_TIME(${sumExpr}) AS total_hms
+        FROM calls
+        ${w}
+      `;
+      const [rows] = await db.query(sql, p);
+      const r = rows[0] || { total_seconds: 0, total_hms: '00:00:00' };
+
+      return res.json({
+        mode: 'range',
+        company_id: asALL(company_id),
+        from: asALL(from),
+        to: asALL(to),
+        total_seconds: Number(r.total_seconds || 0),
+        total_hms: r.total_hms || '00:00:00'
+      });
+    }
+
+    /* ============ DAY MODE (date=YYYY-MM-DD) ============ */
     if (date) {
       const w = `${where} AND DATE(Call_DateTime) = ?`;
       const p = [...params, date];
 
       const sql = `
         SELECT
-          DATE(Call_DateTime) AS day,
           ${sumExpr} AS total_seconds,
           SEC_TO_TIME(${sumExpr}) AS total_hms
         FROM calls
         ${w}
-        GROUP BY day
       `;
       const [rows] = await db.query(sql, p);
-      const r = rows[0] || null;
+      const r = rows[0] || { total_seconds: 0, total_hms: '00:00:00' };
 
       return res.json({
         mode: 'day',
-        company_id: company_id || 'ALL',
-        day: date,
-        total_seconds: r ? r.total_seconds : 0,
-        total_hms: r ? r.total_hms : '00:00:00'
+        company_id: asALL(company_id),
+        from: date,
+        to: date,
+        total_seconds: Number(r.total_seconds || 0),
+        total_hms: r.total_hms || '00:00:00'
       });
     }
 
-    // --- MONTH MODE ---
+    /* ============ MONTH MODE (month=YYYY-MM) ============ */
     if (month) {
-      // month format expected: YYYY-MM
       const start = `${month}-01`;
+      // compute last day of given month
+      const [yr, mo] = month.split('-').map(Number);
+      const endDate = new Date(yr, mo, 0); // last day of that month
+      const end = fmtDate(endDate);
+
       const w = `${where} AND Call_DateTime >= ? AND Call_DateTime < DATE_ADD(?, INTERVAL 1 MONTH)`;
       const p = [...params, start, start];
 
       const sql = `
         SELECT
-          DATE_FORMAT(Call_DateTime, '%Y-%m') AS ym,
           ${sumExpr} AS total_seconds,
           SEC_TO_TIME(${sumExpr}) AS total_hms
         FROM calls
         ${w}
-        GROUP BY ym
       `;
       const [rows] = await db.query(sql, p);
-      const r = rows[0] || null;
+      const r = rows[0] || { total_seconds: 0, total_hms: '00:00:00' };
 
       return res.json({
         mode: 'month',
-        company_id: company_id || 'ALL',
-        month,
-        total_seconds: r ? r.total_seconds : 0,
-        total_hms: r ? r.total_hms : '00:00:00'
+        company_id: asALL(company_id),
+        from: start,
+        to: end,
+        total_seconds: Number(r.total_seconds || 0),
+        total_hms: r.total_hms || '00:00:00'
       });
     }
 
-    // --- YEAR MODE ---
+    /* ============ YEAR MODE (year=YYYY) ============ */
     if (year) {
       const start = `${year}-01-01`;
+      const end = `${year}-12-31`;
+
       const w = `${where} AND Call_DateTime >= ? AND Call_DateTime < DATE_ADD(?, INTERVAL 1 YEAR)`;
       const p = [...params, start, start];
 
       const sql = `
         SELECT
-          YEAR(Call_DateTime) AS y,
           ${sumExpr} AS total_seconds,
           SEC_TO_TIME(${sumExpr}) AS total_hms
         FROM calls
         ${w}
-        GROUP BY y
       `;
       const [rows] = await db.query(sql, p);
-      const r = rows[0] || null;
+      const r = rows[0] || { total_seconds: 0, total_hms: '00:00:00' };
 
       return res.json({
         mode: 'year',
-        company_id: company_id || 'ALL',
-        year,
-        total_seconds: r ? r.total_seconds : 0,
-        total_hms: r ? r.total_hms : '00:00:00'
+        company_id: asALL(company_id),
+        from: start,
+        to: end,
+        total_seconds: Number(r.total_seconds || 0),
+        total_hms: r.total_hms || '00:00:00'
       });
     }
 
-    // --- FALLBACK: return all three rollups when no date/month/year given ---
+    /* ============ ROLLUPS (no filters) ============ */
     const sqlDay = `
       SELECT DATE(Call_DateTime) AS day,
              ${sumExpr} AS total_seconds,
@@ -449,47 +492,47 @@ exports.getTotalCallTime = async (req, res) => {
       ORDER BY day;
     `;
     const sqlMonth = `
-      SELECT YEAR(Call_DateTime) AS year,
-             MONTH(Call_DateTime) AS month,
-             DATE_FORMAT(Call_DateTime, '%Y-%m') AS ym,
+      SELECT DATE_FORMAT(Call_DateTime, '%Y-%m') AS ym,
              ${sumExpr} AS total_seconds,
              SEC_TO_TIME(${sumExpr}) AS total_hms
       FROM calls
       ${where}
-      GROUP BY year, month
-      ORDER BY year, month;
+      GROUP BY ym
+      ORDER BY ym;
     `;
     const sqlYear = `
-      SELECT YEAR(Call_DateTime) AS year,
+      SELECT YEAR(Call_DateTime) AS y,
              ${sumExpr} AS total_seconds,
              SEC_TO_TIME(${sumExpr}) AS total_hms
       FROM calls
       ${where}
-      GROUP BY year
-      ORDER BY year;
+      GROUP BY y
+      ORDER BY y;
     `;
 
-    const [perDay]   = await db.query(sqlDay,   [...params]);
+    const [perDay] = await db.query(sqlDay, [...params]);
     const [perMonth] = await db.query(sqlMonth, [...params]);
-    const [perYear]  = await db.query(sqlYear,  [...params]);
+    const [perYear] = await db.query(sqlYear, [...params]);
 
-    res.json({
-      mode: 'rollups',
-      company_id: company_id || 'ALL',
-      perDay,
-      perMonth,
-      perYear
-    });
-
+   return res.json({
+ 
+  company_id: asALL(company_id), // stays "ALL" if missing
+  from: null,                    // <-- was "ALL"
+  to: null,                      // <-- was "ALL"
+  perDay,
+  perMonth,
+  perYear
+});
   } catch (error) {
     res.status(500).json({ error: 'Database error', details: error.message });
   }
 };
 
 
+
 // GET /api/billing-rows?company_id=comp_0001&from=2025-08-01&to=2025-08-31
 // GET /api/billing-totals?company_id=comp_0001&from=2025-08-01&to=2025-08-31
-exports.getBillingTable= async (req, res) => {
+exports.getBillingTable = async (req, res) => {
   try {
     const { company_id, from, to } = req.query;
 
