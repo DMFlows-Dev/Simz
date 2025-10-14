@@ -1,10 +1,13 @@
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 
 const callRoutes = require('./routes/callRoutes');
 
 const app = express();
 app.use(express.json());
+// Enable CORS for all origins. To restrict origins, replace with options or an allow-list.
+app.use(cors());
 app.use('/api', callRoutes);
 
 app.get('/', (req, res) => {

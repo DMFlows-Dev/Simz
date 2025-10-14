@@ -14,9 +14,9 @@
 ## Setup
 1. Copy `.env.sample` to `.env` and fill in your database credentials.
 2. Install dependencies:
-   ```sh
-   npm install express mysql2 dotenv
-   ```
+  ```sh
+  npm install express mysql2 dotenv cors
+  ```
 3. Start the server:
    ```sh
    node server.js
@@ -42,3 +42,7 @@ See `.env.sample` for required variables.
 
 ## Error Handling
 All database and API errors return JSON with error details.
+
+## CORS
+This server enables Cross-Origin Resource Sharing (CORS) by using the `cors` middleware in `server.js`.
+By default it allows all origins. To restrict allowed origins, update the `cors()` call in `server.js` with an options object or an allow-list.
